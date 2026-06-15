@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import time
 
 DB_NAME = "tamagochi.db"
 
@@ -51,7 +52,7 @@ def create_user(user_id, username):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)', (user_id, username))
-    cursor.execute('INSERT OR IGNORE INTO pet_stats (user_id, last_update) VALUES (?, ?)', (user_id, int(os.time.time()) if hasattr(os, 'time') else 0))
+    cursor.execute('INSERT OR IGNORE INTO pet_stats (user_id, last_update) VALUES (?, ?)', (user_id, int(time.time())))
     conn.commit()
     conn.close()
 
@@ -83,7 +84,6 @@ def get_stats(user_id):
     return dict(stats) if stats else {"hunger": 100, "mood": 100, "energy": 100, "health": 100}
 
 def update_stat(user_id, stat_name, amount):
-    # Разрешенные колонки для обновления в разных таблицах
     user_cols = ['diamonds', 'level', 'xp', 'location', 'current_task']
     stat_cols = ['hunger', 'mood', 'energy', 'health']
     
@@ -93,13 +93,12 @@ def update_stat(user_id, stat_name, amount):
     if stat_name in user_cols:
         if stat_name in ['diamonds', 'level', 'xp', 'current_task']:
             cursor.execute(f'UPDATE users SET {stat_name} = ? WHERE user_id = ?', (amount, user_id))
-        else: # Текстовые поля, например location
+        else:
             cursor.execute(f'UPDATE users SET {stat_name} = ? WHERE user_id = ?', (str(amount), user_id))
     elif stat_name in stat_cols:
-        # Ограничиваем показатели от 0 до 100
         current = get_stats(user_id).get(stat_name, 100)
         new_val = max(0, min(100, current + amount if isinstance(amount, int) and stat_name != 'set' else amount))
-        cursor.execute(f'UPDATE pet_stats SET {stat_name} = ?, last_update = ? WHERE user_id = ?', (new_val, int(os.time.time()) if hasattr(os, 'time') else 0, user_id))
+        cursor.execute(f'UPDATE pet_stats SET {stat_name} = ?, last_update = ? WHERE user_id = ?', (new_val, int(time.time()), user_id))
         
     conn.commit()
     conn.close()
@@ -125,6 +124,10 @@ def transfer_diamonds(sender_id, receiver_id, amount):
     sender = get_user(sender_id)
     if not sender or sender['diamonds'] < amount:
         return False, "❌ Недостаточно алмазов для перевода!"
+        
+    receiver = get_user(receiver_id)
+    if not receiver:
+        return False, "❌ Игрок с таким ID не зарегистрирован в боте!"
         
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -154,21 +157,6 @@ def add_item_to_inventory(user_id, item_name):
     conn.commit()
     conn.close()
 
-def remove_item_from_inventory(user_id, item_name):
-    user = get_user(user_id)
-    if not user or not user.get('inventory'): return False
-    items = [x.strip() for x in user['inventory'].split(',') if x.strip()]
-    if item_name in items:
-        items.remove(item_name)
-        new_inv = ",".join(items)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE users SET inventory = ? WHERE user_id = ?', (new_inv, user_id))
-        conn.commit()
-        conn.close()
-        return True
-    return False
-
 def next_task(user_id):
     user = get_user(user_id)
     if user:
@@ -182,17 +170,7 @@ def get_top_users(limit=10):
     conn.close()
     return [dict(r) for r in rows]
 
-def get_user_rank(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users WHERE diamonds > (SELECT diamonds FROM users WHERE user_id = ?)', (user_id,))
-    rank = cursor.fetchone()[0] + 1
-    conn.close()
-    return rank
-
 def update_all_stats(user_id):
-    # Логика симуляции уменьшения потребностей со временем
-    import time
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT last_update FROM pet_stats WHERE user_id = ?', (user_id,))
@@ -203,7 +181,7 @@ def update_all_stats(user_id):
     now = int(time.time())
     diff = now - last_update
     
-    if diff > 60: # Каждые 60 секунд питомец хочет кушать и грустит
+    if diff > 60:
         intervals = diff // 60
         cursor.execute('''
             UPDATE pet_stats 
@@ -215,34 +193,3 @@ def update_all_stats(user_id):
         ''', (intervals * 2, intervals * 1, intervals * 1, now, user_id))
         conn.commit()
     conn.close()
-
-def can_claim_daily(user_id):
-    import time
-    user = get_user(user_id)
-    if not user: return False, 0
-    now = int(time.time())
-    passed = now - user.get('last_daily', 0)
-    if passed >= 86400: # 24 часа
-        return True, 0
-    return False, round((86400 - passed) / 3600, 1)
-
-def claim_daily(user_id):
-    import time
-    user = get_user(user_id)
-    now = int(time.time())
-    streak = user.get('daily_streak', 0)
-    
-    # Если прошло меньше 48 часов, серия продолжается, иначе сгорает
-    if now - user.get('last_daily', 0) < 172800:
-        streak += 1
-    else:
-        streak = 1
-        
-    bonus = 10 + min(streak, 7) * 5 # Бонус растет с каждым днем
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET diamonds = diamonds + ?, last_daily = ?, daily_streak = ? WHERE user_id = ?', (bonus, now, streak, user_id))
-    conn.commit()
-    conn.close()
-    return bonus, streak
