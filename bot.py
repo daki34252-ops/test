@@ -15,8 +15,7 @@ from database import *
 
 # ТВОЙ ТЕСТОВЫЙ ТОКЕН
 BOT_TOKEN = "7988232708:AAFTsl6zjIwnoUDk8ZmVJZuwf-4mO_5W_8o"
-ADMIN_IDS = [5271890333] # Твой личный ID прописан жестко кодом
-
+ADMIN_IDS = [8420827188] # Твой актуальный ID
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 app = Flask(__name__)
