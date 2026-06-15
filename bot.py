@@ -15,8 +15,7 @@ from database import *
 
 # ТВОЙ ТЕСТОВЫЙ ТОКЕН
 BOT_TOKEN = "7988232708:AAFTsl6zjIwnoUDk8ZmVJZuwf-4mO_5W_8o"
-# Администраторы подгружаются из настроек хостинга, либо добавь свой ID прямо в список, например: ADMIN_IDS = [12345678]
-ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x]
+ADMIN_IDS = [5271890333] # Твой личный ID прописан жестко кодом
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -24,9 +23,9 @@ app = Flask(__name__)
 
 # ============ ДАННЫЕ ДЛЯ ЛОКАЦИЙ И ТРАНСПОРТА ============
 LOCATIONS = {
-    "city": {"name": "🏙 Город", "markup": 1.0, "desc": "Обычные цены и базовые квесты."},
-    "village": {"name": "🏡 Деревня", "markup": 1.5, "desc": "Цены выше в 1.5 раза. Свежий воздух!"},
-    "space": {"name": "🚀 Космос", "markup": 3.0, "desc": "Цены выше в 3 раза. Космические квесты!"}
+    "city": {"name": "🏙 Город", "desc": "Обычные цены и базовые квесты."},
+    "village": {"name": "🏡 Деревня", "desc": "Уникальный сельский магазин. Свежий воздух!"},
+    "space": {"name": "🚀 Космос", "desc": "Космические артефакты и высокие награды!"}
 }
 
 TRANSPORT = {
@@ -35,16 +34,33 @@ TRANSPORT = {
     "rocket": {"name": "🚀 Ракета", "price": 100, "delay": 0, "desc": "Моментальный прилет!"}
 }
 
-TOY_SHOP = {
-    "ball": {"name": "🎾 Мячик", "price": 10, "mood": 25},
-    "rope": {"name": "🧶 Веревка", "price": 20, "mood": 50},
-    "laser": {"name": "🔦 Лазер", "price": 40, "mood": 80}
-}
-
+# Магазины еды (базовые цены, умножаются на локацию при необходимости, либо остаются статичными)
 FOOD_SHOP = {
     "apple": {"name": "🍎 Яблоко", "price": 2, "hunger": 15},
     "meat": {"name": "🍖 Мясо", "price": 5, "hunger": 40},
     "fish": {"name": "🐟 Рыба", "price": 8, "hunger": 60}
+}
+
+# Уникальные магазины для каждой локации с собственными предметами и ценами
+LOCATION_SHOPS = {
+    "city": {
+        "ball": {"name": "🎾 Резиновый мячик", "price": 10, "mood": 20},
+        "rope": {"name": "🧶 Канат для перетягивания", "price": 25, "mood": 45},
+        "laser": {"name": "🔦 Лазерная указка", "price": 50, "mood": 70},
+        "mouse": {"name": "🐭 Заводная мышка", "price": 80, "mood": 95}
+    },
+    "village": {
+        "milk": {"name": "🥛 Миска парного молока", "price": 15, "mood": 25},
+        "hay": {"name": "🌾 Ароматный стог сена", "price": 30, "mood": 50},
+        "boots": {"name": "🥾 Старый дедовский сапог", "price": 65, "mood": 75},
+        "tractor": {"name": "🚜 Мини-трактор на радиоуправлении", "price": 150, "mood": 100}
+    },
+    "space": {
+        "star": {"name": "⭐ Пойманая падающая звезда", "price": 100, "mood": 40},
+        "alien": {"name": "👽 Плюшевый пришелец Марси", "price": 220, "mood": 65},
+        "meteor": {"name": "☄️ Светящийся осколок метеорита", "price": 450, "mood": 85},
+        "blaster": {"name": "🔫 Квантовый бластер бесконечности", "price": 900, "mood": 100}
+    }
 }
 
 # ============ ГЛАВНОЕ МЕНЮ (КНОПКИ ВНИЗУ) ============
@@ -57,7 +73,7 @@ def get_main_keyboard():
     ]
     return types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# Вспомогательная функция для добавления XP и проверки уровня
+# Функция для начисления опыта и левелапа
 def add_xp(user_id, xp_amount):
     user = get_user(user_id)
     if not user: return ""
@@ -67,7 +83,6 @@ def add_xp(user_id, xp_amount):
     
     lvl_msg = f"\n✨ Получено +{xp_amount} XP!"
     
-    # 1 уровень = 1000 XP
     while current_xp >= 1000 and current_lvl < 100:
         current_xp -= 1000
         current_lvl += 1
@@ -90,19 +105,23 @@ def get_pet_face(pet_type, mood, hunger):
     }
     return faces.get(pet_type, "(◕‿◕) *радуется*")
 
-# Сюжетные квесты (теперь с рандомом на плюс и МИНУС)
-def get_interactive_quest(task_id, location_markup=1.0):
+# Сюжетные квесты с рандомом в плюс/минус и малым шансом на дополнительный XP
+def get_interactive_quest(task_id, location_key="city"):
     scenarios = [
         {"q": "нашел подозрительный сундук. Открываем?", "r": 20, "fail_r": -10, "txt1": "Там были алмазы! +20💎", "txt2": "Сундук укусил питомца! Потеряно -10💎"},
         {"q": "увидел торговца редкими артефактами. Довериться?", "r": 35, "fail_r": -20, "txt1": "Торговец подарил вам ценный бонус! +35💎", "txt2": "Это был воришка! Из кармана пропало -20💎"},
         {"q": "решил зайти в темную пещеру. Идем?", "r": 50, "fail_r": -15, "txt1": "Вы нашли древний клад! +50💎", "txt2": "Питомец испугался летучих мышей и выронил -15💎"}
     ]
     scene = scenarios[task_id % len(scenarios)]
+    
+    # Модификатор наград от локации
+    markup = 3.0 if location_key == "space" else (1.5 if location_key == "village" else 1.0)
+    
     return {
         "text": f"Событие №{task_id}: Твой питомец {scene['q']}",
         "btn1": "👍 Да", "btn2": "👎 Нет",
-        "reward1": int(scene["r"] * location_markup), 
-        "reward2": int(scene["fail_r"] * location_markup),
+        "reward1": int(scene["r"] * markup), 
+        "reward2": int(scene["fail_r"] * markup),
         "success1": scene["txt1"], "success2": scene["txt2"]
     }
 
@@ -115,7 +134,6 @@ class CreatePet(StatesGroup):
 class TravelState(StatesGroup):
     waiting_for_transport = State()
 
-# Временное хранилище промокодов в оперативной памяти бота
 PROMO_CODES = {}
 
 # ============ ХЕНДЛЕРЫ КНОПОК ПАНЕЛИ ============
@@ -134,10 +152,9 @@ async def cmd_my_id(message: types.Message):
 
 # ============ АДМИН-КОМАНДЫ (ПРОМОКОДЫ И УРОВЕНЬ) ============
 
-# Создать промокод: /create_promo [название] [алмазы] [xp] [активации]
 @dp.message(Command("create_promo"))
 async def cmd_create_promo(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id not in ADMIN_IDS: return
     args = message.text.split()
     if len(args) < 5:
         await message.answer("⚠️ Использование: `/create_promo [код] [алмазы] [xp] [макс_активаций]`", parse_mode="Markdown")
@@ -149,17 +166,11 @@ async def cmd_create_promo(message: types.Message):
         xp = int(args[3])
         max_uses = int(args[4])
         
-        PROMO_CODES[code] = {
-            "diamonds": diamonds,
-            "xp": xp,
-            "max_uses": max_uses,
-            "used_by": []
-        }
-        await message.answer(f"✅ Промокод `{code}` успешно создан!\n💎 Алмазы: {diamonds}\n✨ XP: {xp}\n👥 Лимит активаций: {max_uses}", parse_mode="Markdown")
+        PROMO_CODES[code] = {"diamonds": diamonds, "xp": xp, "max_uses": max_uses, "used_by": []}
+        await message.answer(f"✅ Промокод `{code}` успешно создан!\n💎 Алмазы: {diamonds}\n✨ XP: {xp}\n👥 Лимит: {max_uses}", parse_mode="Markdown")
     except ValueError:
-        await message.answer("❌ Параметры (алмазы, xp, активации) должны быть целыми числами!")
+        await message.answer("❌ Параметры должны быть числами!")
 
-# Активация промокода для игроков: /promo [код]
 @dp.message(Command("promo"))
 async def cmd_use_promo(message: types.Message):
     args = message.text.split()
@@ -169,31 +180,25 @@ async def cmd_use_promo(message: types.Message):
     
     code = args[1].lower()
     user_id = message.from_user.id
-    
     if code not in PROMO_CODES:
-        await message.answer("❌ Такого промокода не существует, или у него закончился срок действия.")
+        await message.answer("❌ Такого промокода не существует или его лимит исчерпан.")
         return
-        
     promo = PROMO_CODES[code]
-    
     if user_id in promo["used_by"]:
-        await message.answer("❌ Ты уже активировал данный промокод!")
+        await message.answer("❌ Ты уже активировал этот промокод!")
         return
-        
     if len(promo["used_by"]) >= promo["max_uses"]:
-        await message.answer("❌ Этот промокод уже ввели максимальное количество раз.")
+        await message.answer("❌ Лимит активаций промокода закончился.")
         return
         
     promo["used_by"].append(user_id)
     add_diamonds(user_id, promo["diamonds"])
     lvl_msg = add_xp(user_id, promo["xp"])
-    
-    await message.answer(f"🎉 Промокод успешно активирован!\nПолучено: +{promo['diamonds']}💎{lvl_msg}", parse_mode="Markdown")
+    await message.answer(f"🎉 Промокод активирован!\nПолучено: +{promo['diamonds']}💎{lvl_msg}", parse_mode="Markdown")
 
-# Редактировать уровень игрока: /set_lvl [ID] [Уровень]
 @dp.message(Command("set_lvl"))
 async def cmd_set_lvl(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id not in ADMIN_IDS: return
     args = message.text.split()
     if len(args) < 3:
         await message.answer("⚠️ Использование: `/set_lvl [ID_игрока] [Уровень]`", parse_mode="Markdown")
@@ -203,20 +208,19 @@ async def cmd_set_lvl(message: types.Message):
         lvl = max(1, min(100, int(args[2])))
         update_stat(target_id, 'level', lvl)
         update_stat(target_id, 'xp', 0)
-        await message.answer(f"👑 Игроку `{target_id}` успешно установлен {lvl} уровень!", parse_mode="Markdown")
+        await message.answer(f"👑 Игроку `{target_id}` установлен {lvl} уровень!", parse_mode="Markdown")
     except ValueError:
-        await message.answer("❌ Вводи числа!")
+        await message.answer("❌ Ошибка ввода числовых параметров.")
 
-# Сохраняем админ чит коды
 @dp.message(Command("cheat_money"))
 async def admin_cheat_money(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id not in ADMIN_IDS: return
     add_diamonds(message.from_user.id, 5000)
     await message.answer("🤫 Зачислено +5000 читерских алмазов!")
 
 @dp.message(Command("give"))
 async def admin_give_diamonds(message: types.Message):
-    if ADMIN_IDS and message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id not in ADMIN_IDS: return
     args = message.text.split()
     if len(args) < 3: return
     try:
@@ -225,6 +229,42 @@ async def admin_give_diamonds(message: types.Message):
         await message.answer(f"👑 Начислено {amount}💎 игроку {target_id}.")
     except: pass
 
+# ============ СИСТЕМА ДАРЕНИЯ АЛМАЗОВ МЕЖДУ ИГРОКАМИ ============
+
+@dp.message(Command("gift"))
+async def cmd_gift_diamonds(message: types.Message):
+    args = message.text.split()
+    if len(args) < 3:
+        await message.answer(
+            "⚠️ **Как правильно дарить алмазы:**\n"
+            "Введи команду вот так:\n"
+            "`/gift [ID_получателя] [количество]`\n\n"
+            "Пример: `/gift 5271890333 10`", 
+            parse_mode="Markdown"
+        )
+        return
+    try:
+        target_id = int(args[1])
+        amount = int(args[2])
+        sender_id = message.from_user.id
+        
+        if sender_id == target_id:
+            await message.answer("❌ Нельзя дарить алмазы самому себе!")
+            return
+            
+        success, msg = transfer_diamonds(sender_id, target_id, amount)
+        await message.answer(msg, parse_mode="Markdown")
+        
+        if success:
+            try:
+                await bot.send_message(
+                    target_id, 
+                    f"🎉 Тебе подарок!\nИгрок `{sender_id}` отправил тебе **{amount}** 💎!", 
+                    parse_mode="Markdown"
+                )
+            except Exception: pass
+    except ValueError:
+        await message.answer("❌ Ошибка! ID игрока и количество алмазов должны быть числами.")
 
 # ============ СИСТЕМА ЛОКАЦИЙ И ПУТЕШЕСТВИЙ ============
 
@@ -265,19 +305,16 @@ async def start_trip(callback: types.CallbackQuery, state: FSMContext):
     tr = TRANSPORT[tr_key]
     
     if not remove_diamonds(user_id, tr['price']):
-        await callback.answer("❌ Недостаточно алмазов для билета на этот транспорт!", show_alert=True)
+        await callback.answer("❌ Недостаточно алмазов для билета!", show_alert=True)
         return
         
-    await callback.message.edit_text(f"⏳ Ты зашел в транспорт {tr['name']}. Поездка началась! Ждем прибытия {tr['delay']} сек...")
-    
-    # Симуляция ожидания в зависимости от транспорта
+    await callback.message.edit_text(f"⏳ Поездка началась на {tr['name']}! Ждем прибытия {tr['delay']} сек...")
     if tr['delay'] > 0:
         await asyncio.sleep(tr['delay'])
         
     update_stat(user_id, 'location', target_loc)
-    await callback.message.answer(f"🎉 Дзынь! Транспорт прибыл на станцию. Добро пожаловать в **{LOCATIONS[target_loc]['name']}**!", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+    await callback.message.answer(f"🎉 Прибыли! Добро пожаловать в **{LOCATIONS[target_loc]['name']}**!", reply_markup=get_main_keyboard(), parse_mode="Markdown")
     await state.clear()
-
 
 # ============ СТАРТ И СОЗДАНИЕ ПИТОМЦА ============
 
@@ -285,7 +322,7 @@ async def start_trip(callback: types.CallbackQuery, state: FSMContext):
 async def cmd_start(message: types.Message, state: FSMContext):
     user = get_user(message.from_user.id)
     if user and user.get('pet_name'):
-        await message.answer(f"Твой питомец уже ждет тебя в меню!", reply_markup=get_main_keyboard())
+        await message.answer(f"Твой питомец уже ждет тебя в главном меню!", reply_markup=get_main_keyboard())
         return
     create_user(message.from_user.id, message.from_user.first_name)
     await message.answer("Привет! Давай создадим тебе питомца. Как мне к тебе обращаться?", reply_markup=get_main_keyboard())
@@ -328,9 +365,8 @@ async def save_pet_name(message: types.Message, state: FSMContext):
     data = await state.get_data()
     update_user_pet_info(message.from_user.id, pet_name, data['pet_gender'], data['pet_type'], data['egg_type'])
     add_diamonds(message.from_user.id, 15)
-    await message.answer("🎉 Питомец успешно создан! Вся панель управления теперь находится кнопками внизу экрана.", reply_markup=get_main_keyboard())
+    await message.answer("🎉 Питомец успешно создан! Панель управления находится кнопками внизу экрана.", reply_markup=get_main_keyboard())
     await state.clear()
-
 
 # ============ РЕНДЕР ГЛАВНОГО МЕНЮ ============
 async def render_main_menu(message: types.Message, user_id: int, edit: bool = False):
@@ -371,45 +407,63 @@ async def render_main_menu(message: types.Message, user_id: int, edit: bool = Fa
     else:
         await message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
 
-
-# ============ ХЕНДЛЕРЫ КОРМЛЕНИЯ И ИГР (+XP ЗА ДЕЙСТВИЯ) ============
+# ============ КОРМЛЕНИЕ И ИГРЫ (+XP ЗА ДЕЙСТВИЯ) ============
 
 @dp.callback_query(F.data == "act_feed_menu")
 async def feed_menu(callback: types.CallbackQuery):
-    user = get_user(callback.from_user.id)
-    loc = user.get('location', 'city')
-    markup = LOCATIONS.get(loc, {}).get('markup', 1.0)
-    
     buttons = []
     for k, v in FOOD_SHOP.items():
-        price = int(v['price'] * markup)
-        buttons.append([types.InlineKeyboardButton(text=f"{v['name']} ({price}💎, +{v['hunger']}% сытости)", callback_data=f"feed_{k}")])
+        buttons.append([types.InlineKeyboardButton(text=f"{v['name']} ({v['price']}💎, +{v['hunger']}% сытости)", callback_data=f"feed_{k}")])
     buttons.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")])
-    await callback.message.edit_text("Выбери еду (На этой локации цены изменены торговцами):", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.message.edit_text("Выбери еду из общих запасов:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @dp.callback_query(F.data.startswith("feed_"))
 async def process_feed(callback: types.CallbackQuery):
     food_key = callback.data.replace("feed_", "")
-    user = get_user(callback.from_user.id)
-    loc = user.get('location', 'city')
-    markup = LOCATIONS.get(loc, {}).get('markup', 1.0)
-    
     food = FOOD_SHOP[food_key]
-    final_price = int(food['price'] * markup)
     
-    if remove_diamonds(callback.from_user.id, final_price):
+    if remove_diamonds(callback.from_user.id, food['price']):
         update_stat(callback.from_user.id, 'hunger', food['hunger'])
         lvl_msg = add_xp(callback.from_user.id, 60) # +60 XP за кормление
-        await callback.message.edit_text(f"🍽 Питомец наелся! Показатель сытости повышен.{lvl_msg}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]]))
+        await callback.message.edit_text(f"🍽 Питомец сыт! Голод уменьшен.{lvl_msg}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]]))
     else:
-        await callback.answer("У тебя не хватает алмазов на покупку еды!", show_alert=True)
+        await callback.answer("У тебя не хватает алмазов на еду!", show_alert=True)
+
+@dp.callback_query(F.data == "act_game_menu")
+async def game_menu(callback: types.CallbackQuery):
+    user = get_user(callback.from_user.id)
+    loc = user.get('location', 'city') if user else 'city'
+    current_shop = LOCATION_SHOPS.get(loc, LOCATION_SHOPS["city"])
+    
+    buttons = []
+    for k, v in current_shop.items():
+        buttons.append([types.InlineKeyboardButton(text=f"{v['name']} ({v['price']}💎, +{v['mood']}% настроения)", callback_data=f"play_{k}")])
+    buttons.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")])
+    await callback.message.edit_text("Выбери игрушку из текущего магазина локации:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@dp.callback_query(F.data.startswith("play_"))
+async def process_game(callback: types.CallbackQuery):
+    toy_key = callback.data.replace("play_", "")
+    user = get_user(callback.from_user.id)
+    loc = user.get('location', 'city') if user else 'city'
+    
+    current_shop = LOCATION_SHOPS.get(loc, LOCATION_SHOPS["city"])
+    toy = current_shop.get(toy_key)
+    
+    if not toy: return
+    if remove_diamonds(callback.from_user.id, toy['price']):
+        update_stat(callback.from_user.id, 'mood', toy['mood'])
+        lvl_msg = add_xp(callback.from_user.id, 80) # +80 XP за игру
+        await callback.message.edit_text(f"🎲 Вы отлично поиграли в {toy['name']}!{lvl_msg}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]]))
+    else:
+        await callback.answer("Не хватает алмазов для этой игрушки!", show_alert=True)
 
 @dp.callback_query(F.data == "act_sleep")
 async def process_sleep(callback: types.CallbackQuery):
     if remove_diamonds(callback.from_user.id, 2):
         update_stat(callback.from_user.id, 'energy', 35)
         lvl_msg = add_xp(callback.from_user.id, 100) # +100 XP за сон
-        await callback.message.edit_text(f"🛌 Питомец лег спать и восстановил силы.{lvl_msg}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]]))
+        await callback.message.edit_text(f"🛌 Питомец уснул и восстановил силы.{lvl_msg}", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]]))
     else:
         await callback.answer("Недостаточно алмазов!", show_alert=True)
 
@@ -417,7 +471,6 @@ async def process_sleep(callback: types.CallbackQuery):
 async def back_to_menu_callback(callback: types.CallbackQuery):
     await render_main_menu(callback.message, callback.from_user.id, edit=True)
     await callback.answer()
-
 
 # ============ ЛУТБОКС (РАНДОМ НА ПЛЮС И МИНУС) ============
 @dp.message(F.text == "🎰 Бокс удачи")
@@ -427,27 +480,25 @@ async def open_lucky_box(message: types.Message):
         await message.answer("Открытие бокса стоит 5 алмазов.")
         return
         
-    msg = await message.answer("🎰 Коробка трясется...\n[❓] [❓] [❓]")
+    msg = await message.answer("🎰 Коробка открывается...\n[❓] [❓] [❓]")
     await asyncio.sleep(1)
     
     loot_type = random.choice(["win_diamonds", "lose_diamonds", "xp", "nothing"])
-    
     if loot_type == "win_diamonds":
         win = random.randint(10, 30)
         add_diamonds(user_id, win)
-        await msg.edit_text(f"🎁 Фортуна! Из коробки высыпались драгоценности: +{win}💎")
+        await msg.edit_text(f"🎁 Фортуна! Из коробки высыпались сокровища: +{win}💎")
     elif loot_type == "lose_diamonds":
         loss = random.randint(5, 12)
         remove_diamonds(user_id, loss)
-        await msg.edit_text(f"💥 Бабах! Коробка взорвалась сажей, напугав питомца! Потеряно -{loss}💎")
+        await msg.edit_text(f"💥 Бабах! Коробка оказалась ловушкой! Потеряно -{loss}💎")
     elif loot_type == "xp":
         lvl_msg = add_xp(user_id, 250)
         await msg.edit_text(f"✨ Внутри была капсула времени!{lvl_msg}")
     else:
         await msg.edit_text("💨 Из коробки вылетел лишь легкий дымок. Пусто.")
 
-
-# ============ ИНТЕРАКТИВНЫЕ КВЕСТЫ (С РАНДОМОМ) ============
+# ============ ИНТЕРАКТИВНЫЕ КВЕСТЫ (С ШАНСОМ НА ДОП XP) ============
 @dp.message(F.text == "📝 Квесты")
 async def show_interactive_quest_msg(message: types.Message):
     user = get_user(message.from_user.id)
@@ -455,9 +506,7 @@ async def show_interactive_quest_msg(message: types.Message):
     
     task_id = user['current_task']
     loc = user.get('location', 'city')
-    markup = LOCATIONS.get(loc, {}).get('markup', 1.0)
-    
-    quest = get_interactive_quest(task_id, location_markup=markup)
+    quest = get_interactive_quest(task_id, location_key=loc)
     
     keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=quest["btn1"], callback_data=f"qst_1_{task_id}"),
@@ -476,21 +525,28 @@ async def handle_quest_choice(callback: types.CallbackQuery):
     if not user or user['current_task'] != task_id: return
         
     loc = user.get('location', 'city')
-    markup = LOCATIONS.get(loc, {}).get('markup', 1.0)
-    quest = get_interactive_quest(task_id, location_markup=markup)
+    quest = get_interactive_quest(task_id, location_key=loc)
     next_task(user_id)
     
-    lvl_msg = add_xp(user_id, 150) # +150 XP за квест всегда
+    # 1. Базовый опыт за прохождение квеста
+    xp_bonus = 150
+    xp_text = ""
+    
+    # 2. ДОБАВЛЕНО: Малый шанс (20%) на то, что выпадет дополнительный мешок опыта (+300 XP)
+    if random.random() < 0.20:
+        xp_bonus += 300
+        xp_text = "\n🍀 **НЕВЕРОЯТНАЯ УДАЧА! Во время квеста найден скрытый свиток опыта (+300 XP сверху!)**"
+        
+    lvl_msg = add_xp(user_id, xp_bonus)
     
     if choice == "1":
         add_diamonds(user_id, quest["reward1"])
-        await callback.message.edit_text(f"🎉 {quest['success1']}\n{lvl_msg}")
+        await callback.message.edit_text(f"🎉 {quest['success1']}{xp_text}{lvl_msg}", parse_mode="Markdown")
     else:
         remove_diamonds(user_id, abs(quest["reward2"]))
-        await callback.message.edit_text(f"❌ {quest['success2']}\n{lvl_msg}")
+        await callback.message.edit_text(f"❌ {quest['success2']}{xp_text}{lvl_msg}", parse_mode="Markdown")
 
-
-# ============ ТАБЛИЦА ЛИДЕРОВ И МАГАЗИН ИГРУШЕК ============
+# ============ ТАБЛИЦА ЛИДЕРОВ И УНИКАЛЬНЫЙ МАГАЗИН ============
 @dp.message(F.text == "🏆 Топ игроков")
 async def show_leaderboard(message: types.Message):
     top_list = get_top_users(10)
@@ -504,41 +560,32 @@ async def show_leaderboard(message: types.Message):
 async def open_shop(message: types.Message):
     user = get_user(message.from_user.id)
     loc = user.get('location', 'city') if user else 'city'
-    markup = LOCATIONS.get(loc, {}).get('markup', 1.0)
+    current_shop = LOCATION_SHOPS.get(loc, LOCATION_SHOPS["city"])
     
     buttons = []
-    for k, v in TOY_SHOP.items():
-        price = int(v['price'] * markup)
-        buttons.append([types.InlineKeyboardButton(text=f"{v['name']} — {price}💎", callback_data=f"buy_toy_{k}")])
-    await message.answer(f"🏪 Магазин игрушек на локации {LOCATIONS[loc]['name']}:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
+    for k, v in current_shop.items():
+        buttons.append([types.InlineKeyboardButton(text=f"{v['name']} — {v['price']}💎", callback_data=f"buy_toy_{k}")])
+        
+    await message.answer(f"🏪 Магазин уникальных товаров в: {LOCATIONS[loc]['name']}:", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @dp.callback_query(F.data.startswith("buy_toy_"))
 async def buy_toy_callback(callback: types.CallbackQuery):
     toy_key = callback.data.replace("buy_toy_", "")
-    toy = TOY_SHOP.get(toy_key)
-    if not toy: return
-    
     user = get_user(callback.from_user.id)
     loc = user.get('location', 'city') if user else 'city'
-    markup = LOCATIONS.get(loc, {}).get('markup', 1.0)
-    final_price = int(toy['price'] * markup)
     
-    if remove_diamonds(callback.from_user.id, final_price):
+    current_shop = LOCATION_SHOPS.get(loc, LOCATION_SHOPS["city"])
+    toy = current_shop.get(toy_key)
+    
+    if not toy: 
+        await callback.answer("❌ Товар исчез с прилавка!", show_alert=True)
+        return
+    
+    if remove_diamonds(callback.from_user.id, toy['price']):
         add_item_to_inventory(callback.from_user.id, toy['name'])
         await callback.answer(f"✅ Успешно куплено: {toy['name']}", show_alert=True)
     else:
-        await callback.answer("❌ Недостаточно алмазов для покупки предмета!", show_alert=True)
-
-@dp.message(Command("gift"))
-async def cmd_gift_diamonds(message: types.Message):
-    args = message.text.split()
-    if len(args) < 3: return
-    try:
-        target_id, amount = int(args[1]), int(args[2])
-        success, msg = transfer_diamonds(message.from_user.id, target_id, amount)
-        await message.answer(msg)
-    except: pass
-
+        await callback.answer("❌ Недостаточно алмазов для покупки!", show_alert=True)
 
 # ============ ВЕБ-СЕРВЕР И СТАРТЕР ============
 @app.route('/')
